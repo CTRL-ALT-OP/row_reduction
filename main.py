@@ -27,6 +27,29 @@ def clone_matrix(matrix: List[List[Fraction]]) -> List[List[Fraction]]:
 	return [row.copy() for row in matrix]
 
 
+def format_linear_expr(constant: Fraction, terms: List[Tuple[Fraction, str]]) -> str:
+	"""Format an expression like constant + sum(coef*name) with clean signs.
+	Examples: 0 and [(1,'t1')] -> "t1"; 3 and [(-2,'t1')] -> "3 - 2*t1"."""
+	parts: List[str] = []
+	if constant != 0 or not terms:
+		parts.append(fraction_to_str(constant))
+	first_term = (constant == 0)
+	for coef, name in terms:
+		if coef == 0:
+			continue
+		is_positive = coef > 0
+		abs_coef = coef if coef >= 0 else -coef
+		coef_str = fraction_to_str(abs_coef)
+		term_core = name if coef_str == '1' else f"{coef_str}*{name}"
+		if first_term:
+			# no leading plus; show minus if negative
+			parts.append(term_core if is_positive else f"-{term_core}")
+			first_term = False
+		else:
+			parts.append(("+ " if is_positive else "- ") + term_core)
+	return " ".join(parts) if parts else "0"
+
+
 class GaussianEliminationStepper:
 	"""Compute RREF with exact Fractions and record each elementary row operation as a step."""
 
@@ -111,7 +134,7 @@ class GaussianEliminationStepper:
 class RowReductionApp(tk.Tk):
 	def __init__(self) -> None:
 		super().__init__()
-		self.title("Row Reduction (Gaussian Elimination) - Exact Fractions")
+		self.title("Row Reduction")
 		self.geometry("980x640")
 		self.minsize(860, 540)
 
@@ -127,6 +150,148 @@ class RowReductionApp(tk.Tk):
 
 		self._build_layout()
 		self._render_input_matrix()
+
+	def _hide_summary(self) -> None:
+		try:
+			self.summary_frame.pack_forget()
+		except Exception:
+			pass
+
+	def on_copy_summary(self) -> None:
+		# Build a plain text block with rank, solutions, dimension, and description
+		text = []
+		text.append(f"Rank: {self.sum_rank_val.cget('text')}")
+		text.append(f"Solutions: {self.sum_solutions_val.cget('text')}")
+		text.append(f"Dimension: {self.sum_dim_val.cget('text')}")
+		try:
+			desc = self.sum_desc_text.get("1.0", tk.END).strip()
+		except Exception:
+			desc = ""
+		if desc:
+			text.append("Description:")
+			text.append(desc)
+		full = "\n".join(text)
+		self.clipboard_clear()
+		self.clipboard_append(full)
+		self.update()
+
+	def _update_solution_summary(self) -> None:
+		if not self.solver:
+			return
+		# Use the final step's matrix (RREF) for analysis
+		final_step = self.solver.steps[-1]
+		A: List[List[Fraction]] = final_step["matrix"]
+		m = len(A)
+		n = len(A[0])
+		# Consider last column as constants if augmented
+		is_augmented = True if n >= 2 else False
+		num_vars = n - 1 if is_augmented else n
+
+		# Compute rank and inconsistency
+		rank = 0
+		inconsistent = False
+		pivot_cols: List[int] = []
+		for r in range(m):
+			row = A[r]
+			# Find first nonzero among variables columns
+			lead_col = None
+			for c in range(num_vars):
+				if row[c] != 0:
+					lead_col = c
+					break
+			# Check inconsistency: all zero in variables but constant != 0
+			if all(row[c] == 0 for c in range(num_vars)):
+				if is_augmented and row[-1] != 0:
+					inconsistent = True
+				continue
+			if lead_col is not None:
+				rank += 1
+				pivot_cols.append(lead_col)
+
+		free_cols = [c for c in range(num_vars) if c not in pivot_cols]
+		dim_solution = 0
+		solutions_label = "-"
+		if inconsistent:
+			solutions_label = "0"
+			dim_solution = 0
+		elif is_augmented:
+			if rank == num_vars:
+				solutions_label = "1"
+				dim_solution = 0
+			else:
+				solutions_label = "infinite"
+				dim_solution = len(free_cols)
+		else:
+			# Homogeneous or non-augmented matrix: solution space dimension = num_vars - rank
+			solutions_label = "infinite" if num_vars - rank > 0 else "1"
+			dim_solution = max(0, num_vars - rank)
+
+		# Build variable names: special-case 4 vars -> w,x,y,z; otherwise start from x,y,z then a..w
+		if num_vars == 4:
+			var_names = ['w', 'x', 'y', 'z']
+		else:
+			name_pool = [chr(c) for c in range(ord('x'), ord('z') + 1)] + [chr(c) for c in range(ord('a'), ord('w') + 1)]
+			var_names = name_pool[:num_vars]
+
+		# Map each pivot column to its row (first nonzero in that row)
+		pivot_col_to_row: Dict[int, int] = {}
+		for r in range(m):
+			row = A[r]
+			lead_col = None
+			for c in range(num_vars):
+				if row[c] != 0:
+					lead_col = c
+					break
+			if lead_col is not None:
+				pivot_col_to_row[lead_col] = r
+
+		desc = []
+		if inconsistent or num_vars == 0:
+			desc_str = "No solution" if inconsistent else ""
+		else:
+			# Unique solution (no free variables)
+			if rank == num_vars and is_augmented:
+				values = [Fraction(0) for _ in range(num_vars)]
+				for pc, r in pivot_col_to_row.items():
+					values[pc] = A[r][-1]
+				desc_parts = [f"{var_names[i]} = {fraction_to_str(values[i])}" for i in range(num_vars)]
+				desc_str = "\n ".join(desc_parts)
+			else:
+				# Parametric solution: use actual variable names for free variables
+				param_names = [var_names[free] for free in free_cols]
+				param_map = {free: param_names[i] for i, free in enumerate(free_cols)}
+				assignments: List[str] = []
+				for j in range(num_vars):
+					if j in free_cols:
+						assignments.append(f"{var_names[j]} = {param_map[j]}")
+						continue
+					row_idx = pivot_col_to_row.get(j)
+					if row_idx is None:
+						assignments.append(f"{var_names[j]} = 0")
+						continue
+					row = A[row_idx]
+					rhs = row[-1] if is_augmented else Fraction(0)
+					terms: List[Tuple[Fraction, str]] = []
+					for k in free_cols:
+						coeff = row[k]
+						if coeff != 0:
+							terms.append((-coeff, param_map[k]))
+					expr = format_linear_expr(rhs, terms)
+					assignments.append(f"{var_names[j]} = {expr}")
+				desc_str = "\n".join(assignments) if assignments else ""
+
+		# Reveal and populate summary
+		try:
+			self.summary_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 6))
+		except Exception:
+			pass
+		self.sum_rank_val.configure(text=str(rank))
+		self.sum_solutions_val.configure(text=solutions_label)
+		self.sum_dim_val.configure(text=str(dim_solution))
+		self.sum_desc_text.configure(state=tk.NORMAL)
+		self.sum_desc_text.delete("1.0", tk.END)
+		self.sum_desc_text.insert("1.0", desc_str)
+		self.sum_desc_text.configure(state=tk.DISABLED)
 
 	def _build_styles(self) -> None:
 		style = ttk.Style(self)
@@ -221,6 +386,40 @@ class RowReductionApp(tk.Tk):
 		self.op_label = ttk.Label(right, text="Operation: (awaiting input)", style="Op.TLabel", wraplength=240, justify=tk.LEFT)
 		self.op_label.pack(side=tk.TOP, anchor=tk.W)
 
+		# Bottom-right: solution summary (hidden until solving)
+		self.summary_frame = ttk.LabelFrame(right, text="Solution Summary")
+		self.summary_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 6))
+		self.summary_frame.pack_forget()
+
+		sf = ttk.Frame(self.summary_frame)
+		sf.pack(side=tk.TOP, fill=tk.X, padx=8, pady=6)
+
+		lbl_rank = ttk.Label(sf, text="Rank:")
+		lbl_rank.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=2)
+		self.sum_rank_val = ttk.Label(sf, text="-")
+		self.sum_rank_val.grid(row=0, column=1, sticky="w", pady=2)
+
+		lbl_solutions = ttk.Label(sf, text="Solutions:")
+		lbl_solutions.grid(row=1, column=0, sticky="w", padx=(0, 6), pady=2)
+		self.sum_solutions_val = ttk.Label(sf, text="-")
+		self.sum_solutions_val.grid(row=1, column=1, sticky="w", pady=2)
+
+		lbl_dim = ttk.Label(sf, text="Dimension:")
+		lbl_dim.grid(row=2, column=0, sticky="w", padx=(0, 6), pady=2)
+		self.sum_dim_val = ttk.Label(sf, text="-")
+		self.sum_dim_val.grid(row=2, column=1, sticky="w", pady=2)
+
+		lbl_desc = ttk.Label(sf, text="Description:")
+		lbl_desc.grid(row=3, column=0, sticky="nw", padx=(0, 6), pady=2)
+		# Use a readonly Text so users can select and copy
+		self.sum_desc_text = tk.Text(sf, width=26, height=6, wrap=tk.WORD)
+		self.sum_desc_text.insert("1.0", "-")
+		self.sum_desc_text.configure(state=tk.DISABLED)
+		self.sum_desc_text.grid(row=3, column=1, sticky="we", pady=2)
+
+		copy_btn = ttk.Button(sf, text="Copy", command=self.on_copy_summary)
+		copy_btn.grid(row=4, column=1, sticky="w", pady=(4, 2))
+
 	def on_add_row(self) -> None:
 		text = self.row_entry.get()
 		if not text.strip():
@@ -254,6 +453,7 @@ class RowReductionApp(tk.Tk):
 		self.op_label.configure(text="Operation: (awaiting input)")
 		self.step_label.configure(text="Step: -/-")
 		self._render_input_matrix()
+		self._hide_summary()
 
 	def on_solve(self) -> None:
 		if not self.input_rows:
@@ -272,6 +472,8 @@ class RowReductionApp(tk.Tk):
 		self.step_index = 0
 		self._update_controls_enabled(True)
 		self._render_step()
+		# Compute and show solution summary (based on final RREF)
+		self._update_solution_summary()
 		# Auto-play after solving
 		self.on_play()
 
@@ -391,6 +593,10 @@ class RowReductionApp(tk.Tk):
 		# enable/disable prev/next depending on position
 		self.prev_btn.configure(state=(tk.NORMAL if self.step_index > 0 else tk.DISABLED))
 		self.next_btn.configure(state=(tk.NORMAL if self.step_index < len(self.solver.steps) - 1 else tk.DISABLED))
+
+		# If at final step, ensure summary is visible
+		if self.solver and self.step_index == len(self.solver.steps) - 1:
+			self._update_solution_summary()
 
 
 def main() -> None:
