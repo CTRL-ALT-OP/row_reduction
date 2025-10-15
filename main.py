@@ -255,7 +255,7 @@ class RowReductionApp(tk.Tk):
 				for pc, r in pivot_col_to_row.items():
 					values[pc] = A[r][-1]
 				desc_parts = [f"{var_names[i]} = {fraction_to_str(values[i])}" for i in range(num_vars)]
-				desc_str = "\n ".join(desc_parts)
+				desc_str = "\n".join(desc_parts)
 			else:
 				# Parametric solution: use actual variable names for free variables
 				param_names = [var_names[free] for free in free_cols]
