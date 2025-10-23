@@ -1,3 +1,7 @@
+# Run online in a sandbox at the following link:
+https://codehs.com/sandbox/id/python-graphics-tkinter-YhtGaX/run
+Once the page loads, click the green run button, and the script will run
+
 Row Reduction (Gaussian Elimination) - Exact Fractions
 
 Overview
